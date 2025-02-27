@@ -5,7 +5,7 @@
 :root {
   --foreground-rgb: 255, 255, 255;
   --background-start-rgb: 17, 24, 39;
-  --background-end-rgb: 0, 0, 0;
+  --background-end-rgb: 11, 15, 25;
 }
 
 body {
@@ -18,9 +18,44 @@ body {
   min-height: 100vh;
 }
 
-/* Customize map styles */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgb(17, 24, 39);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgb(75, 85, 99);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(107, 114, 128);
+  }
+}
+
+@layer components {
+  .glass-effect {
+    @apply bg-gray-800/30 backdrop-blur-md border border-gray-700/50;
+  }
+
+  .button-primary {
+    @apply px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg transition-all duration-200 
+    hover:shadow-lg hover:shadow-violet-500/20 active:transform active:scale-95;
+  }
+
+  .card {
+    @apply glass-effect rounded-xl shadow-lg;
+  }
+}
+
+/* Map specific styles */
 .leaflet-container {
-  background-color: #1f2937 !important;
+  background: rgb(17, 24, 39) !important;
 }
 
 .leaflet-popup-content-wrapper {
@@ -32,20 +67,10 @@ body {
   background-color: #374151 !important;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
+.leaflet-control-zoom {
+  @apply !border-gray-700 !bg-gray-800;
 }
 
-::-webkit-scrollbar-track {
-  background: #1f2937;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #4c1d95;
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #6d28d9;
+.leaflet-control-zoom a {
+  @apply !text-gray-300 !bg-gray-800 hover:!bg-gray-700 border-gray-700;
 }
