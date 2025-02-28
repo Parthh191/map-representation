@@ -24,13 +24,6 @@ interface FileUploadProps {
   onDataProcessed: (data: PersonData[]) => void;
 }
 
-interface ProcessingStats {
-  total: number;
-  valid: number;
-  invalid: number;
-  processed: number;
-}
-
 interface ValidationResult {
   valid: RawPersonData[];
   invalid: RawPersonData[];
@@ -55,24 +48,10 @@ const processRawData = (data: RawPersonData[]): ValidationResult => {
   return { valid, invalid, validationErrors };
 };
 
-// Helper function to generate Excel file
-const generateExcelFile = (data: RawPersonData[], fileName: string): Blob => {
-  const worksheet = XLSX.utils.json_to_sheet(data);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-  const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  return new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-};
-
 export default function FileUpload({ onDataProcessed }: FileUploadProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
-  const [stats, setStats] = useState<ProcessingStats | null>(null);
-  const [processedData, setProcessedData] = useState<{
-    valid: RawPersonData[];
-    invalid: RawPersonData[];
-  } | null>(null);
 
   const parseFile = async (file: File): Promise<RawPersonData[]> => {
     try {
@@ -122,7 +101,7 @@ export default function FileUpload({ onDataProcessed }: FileUploadProps) {
           country: item.country || '',
           coordinates: response
         });
-      } catch (error) {
+      } catch {
         console.warn(`Could not process location for: ${item.name}`);
         failedItems.push(item);
       }
@@ -137,40 +116,19 @@ export default function FileUpload({ onDataProcessed }: FileUploadProps) {
     return processedResults;
   };
 
-  const _downloadFile = (data: RawPersonData[], fileName: string) => {
-    const blob = generateExcelFile(data, fileName);
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
-  };
-
   const processFile = async (file: File) => {
     setIsProcessing(true);
     setError(null);
     setProgress(0);
-    setProcessedData(null);
     
     try {
       const rawData = await parseFile(file);
-      const { valid, invalid, validationErrors } = processRawData(rawData);
-
-      setStats({
-        total: rawData.length,
-        valid: valid.length,
-        invalid: invalid.length,
-        processed: 0
-      });
+      const { valid } = processRawData(rawData);
 
       if (valid.length === 0) {
         throw new Error('No valid data found in the file. Please check the format.');
       }
 
-      setProcessedData({ valid, invalid });
       const processedData = await processValidData(valid);
       onDataProcessed(processedData);
     } catch (error) {
