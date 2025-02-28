@@ -2,11 +2,15 @@
 import { useState } from 'react';
 import { geocodeAddress } from '@/utils/geocoding';
 import * as XLSX from 'xlsx';
-import { 
-  processRawData, 
-  generateExcelFile, 
-  type RawPersonData 
-} from '@/utils/dataProcessor';
+
+interface RawPersonData {
+  name?: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  [key: string]: string | undefined; // Allow for dynamic keys from CSV/Excel
+}
 
 interface PersonData {
   name: string;
@@ -26,6 +30,39 @@ interface ProcessingStats {
   invalid: number;
   processed: number;
 }
+
+interface ValidationResult {
+  valid: RawPersonData[];
+  invalid: RawPersonData[];
+  validationErrors: string[];
+}
+
+// Helper function to validate raw data
+const processRawData = (data: RawPersonData[]): ValidationResult => {
+  const valid: RawPersonData[] = [];
+  const invalid: RawPersonData[] = [];
+  const validationErrors: string[] = [];
+
+  data.forEach((item) => {
+    if (item.city || item.country) {
+      valid.push(item);
+    } else {
+      invalid.push(item);
+      validationErrors.push(`Missing required location data for ${item.name || 'Unknown'}`);
+    }
+  });
+
+  return { valid, invalid, validationErrors };
+};
+
+// Helper function to generate Excel file
+const generateExcelFile = (data: RawPersonData[], fileName: string): Blob => {
+  const worksheet = XLSX.utils.json_to_sheet(data);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+  const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  return new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+};
 
 export default function FileUpload({ onDataProcessed }: FileUploadProps) {
   const [isProcessing, setIsProcessing] = useState(false);
@@ -63,14 +100,15 @@ export default function FileUpload({ onDataProcessed }: FileUploadProps) {
     }
   };
 
-  const processValidData = async (validData: RawPersonData[]) => {
+  const processValidData = async (validData: RawPersonData[]): Promise<PersonData[]> => {
     const processedResults: PersonData[] = [];
+    const failedItems: RawPersonData[] = [];
     const total = validData.length;
 
     for (let i = 0; i < validData.length; i++) {
       const item = validData[i];
       try {
-        const coordinates = await geocodeAddress({
+        const response = await geocodeAddress({
           street: item.street,
           city: item.city || '',
           state: item.state,
@@ -82,13 +120,18 @@ export default function FileUpload({ onDataProcessed }: FileUploadProps) {
           city: item.city || '',
           state: item.state || '',
           country: item.country || '',
-          coordinates
+          coordinates: response
         });
       } catch (error) {
-        console.error(`Error processing item:`, item, error);
+        console.warn(`Could not process location for: ${item.name}`);
+        failedItems.push(item);
       }
 
       setProgress(Math.round(((i + 1) / total) * 100));
+    }
+
+    if (failedItems.length > 0) {
+      console.warn(`Failed to process ${failedItems.length} items`);
     }
 
     return processedResults;
@@ -173,39 +216,6 @@ export default function FileUpload({ onDataProcessed }: FileUploadProps) {
           <div className="w-full bg-gray-700 rounded-full h-2">
             <div className="bg-violet-500 h-full rounded-full transition-all duration-300" 
                  style={{ width: `${progress}%` }}/>
-          </div>
-        </div>
-      )}
-
-      {/* Stats and Download Buttons */}
-      {stats && processedData && (
-        <div className="p-4 bg-gray-800 rounded-lg space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="p-3 bg-gray-700 rounded-lg">
-              <div className="text-sm text-gray-400">Valid Records</div>
-              <div className="text-2xl text-violet-400">{stats.valid}</div>
-            </div>
-            <div className="p-3 bg-gray-700 rounded-lg">
-              <div className="text-sm text-gray-400">Invalid Records</div>
-              <div className="text-2xl text-red-400">{stats.invalid}</div>
-            </div>
-          </div>
-
-          <div className="flex gap-4">
-            <button
-              onClick={() => downloadFile(processedData.valid, 'valid-data.xlsx')}
-              className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
-            >
-              Download Valid Data
-            </button>
-            {processedData.invalid.length > 0 && (
-              <button
-                onClick={() => downloadFile(processedData.invalid, 'invalid-data.xlsx')}
-                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
-              >
-                Download Invalid Data
-              </button>
-            )}
           </div>
         </div>
       )}

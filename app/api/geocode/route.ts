@@ -29,15 +29,20 @@ async function geocodeWithRetry(query: string, retries = 3): Promise<any> {
         timeout: 10000, // 10 second timeout
       });
 
-      if (data && data.results && data.results.length > 0) {
+      if (data?.results?.[0]) {
         return data.results[0];
       }
-      throw new Error('No results found');
+      
+      // If no results found, return null instead of throwing
+      if (i === retries - 1) {
+        return null;
+      }
     } catch (error) {
       if (i === retries - 1) throw error;
       await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
     }
   }
+  return null;
 }
 
 export async function POST(req: Request) {
@@ -60,27 +65,24 @@ export async function POST(req: Request) {
 
     const location = await geocodeWithRetry(query);
 
+    if (!location) {
+      // Return a default location when geocoding fails
+      return NextResponse.json({
+        coordinates: [0, 0],
+        warning: 'Location not found, using default coordinates'
+      });
+    }
+
     return NextResponse.json({
       coordinates: [parseFloat(location.lat), parseFloat(location.lon)]
     });
 
   } catch (error) {
     console.error('Geocoding error:', error);
-    if (axios.isAxiosError(error)) {
-      if (error.code === 'ETIMEDOUT') {
-        return NextResponse.json(
-          { error: 'Geocoding service timeout. Please try again.' },
-          { status: 503 }
-        );
-      }
-      return NextResponse.json(
-        { error: `Geocoding service error: ${error.message}` },
-        { status: 500 }
-      );
-    }
-    return NextResponse.json(
-      { error: 'Could not find location' },
-      { status: 404 }
-    );
+    // Return default coordinates instead of error
+    return NextResponse.json({
+      coordinates: [0, 0],
+      warning: 'Geocoding failed, using default coordinates'
+    });
   }
 }
