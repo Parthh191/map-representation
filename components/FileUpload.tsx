@@ -2,6 +2,11 @@
 import { useState } from 'react';
 import { geocodeAddress } from '@/utils/geocoding';
 import * as XLSX from 'xlsx';
+import { 
+  processRawData, 
+  generateExcelFile, 
+  type RawPersonData 
+} from '@/utils/dataProcessor';
 
 interface PersonData {
   name: string;
@@ -15,50 +20,42 @@ interface FileUploadProps {
   onDataProcessed: (data: PersonData[]) => void;
 }
 
-type RowData = string[];
-
-const validateRow = (row: unknown[]): row is RowData => {
-  if (!Array.isArray(row)) return false;
-  if (row.length === 0) return false;
-  
-  // Convert all values to strings and trim them
-  const cleanRow = row.map(item => 
-    item === null || item === undefined ? '' : String(item).trim()
-  );
-  
-  // Check if we have at least a name and some address information
-  return cleanRow.some(cell => cell.length > 0);
-};
+interface ProcessingStats {
+  total: number;
+  valid: number;
+  invalid: number;
+  processed: number;
+}
 
 export default function FileUpload({ onDataProcessed }: FileUploadProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [stats, setStats] = useState<ProcessingStats | null>(null);
+  const [processedData, setProcessedData] = useState<{
+    valid: RawPersonData[];
+    invalid: RawPersonData[];
+  } | null>(null);
 
-  const parseFile = async (file: File): Promise<RowData[]> => {
+  const parseFile = async (file: File): Promise<RawPersonData[]> => {
     try {
       if (file.type === 'text/csv') {
         const text = await file.text();
-        // Handle different line endings and split by comma or semicolon
-        const rows = text
-          .replace(/\r\n/g, '\n')
-          .split('\n')
-          .filter(row => row.trim())
-          .map(row => row.split(/[,;]/).map(cell => cell.trim()));
+        const rows = text.split('\n');
+        const headers = rows[0].split(',').map(h => h.trim());
         
-        console.log('Parsed CSV rows:', rows); // Debug log
-        return rows;
+        return rows.slice(1).map(row => {
+          const values = row.split(',');
+          return headers.reduce((obj: RawPersonData, header, index) => {
+            obj[header.toLowerCase()] = values[index]?.trim() || '';
+            return obj;
+          }, {});
+        });
       } else {
         const buffer = await file.arrayBuffer();
         const workbook = XLSX.read(buffer);
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json<string[]>(sheet, { 
-          header: 1,
-          defval: '' // Use empty string for empty cells
-        });
-        
-        console.log('Parsed Excel rows:', data); // Debug log
-        return data;
+        return XLSX.utils.sheet_to_json<RawPersonData>(sheet);
       }
     } catch (error) {
       console.error('File parsing error:', error);
@@ -66,116 +63,158 @@ export default function FileUpload({ onDataProcessed }: FileUploadProps) {
     }
   };
 
-  const processInBatches = async (rows: RowData[], batchSize = 5) => {
-    const processedData: PersonData[] = [];
-    const totalRows = rows.length - 1; // Excluding header row
-    
-    for (let i = 1; i < rows.length; i += batchSize) {
-      const batch = rows.slice(i, i + batchSize);
-      const batchPromises = batch.map(async (row) => {
-        try {
-          if (!row || row.length < 3) return null;
+  const processValidData = async (validData: RawPersonData[]) => {
+    const processedResults: PersonData[] = [];
+    const total = validData.length;
 
-          const [name, street, city, country] = row.map(cell => 
-            cell ? cell.trim() : ''
-          );
+    for (let i = 0; i < validData.length; i++) {
+      const item = validData[i];
+      try {
+        const coordinates = await geocodeAddress({
+          street: item.street,
+          city: item.city || '',
+          state: item.state,
+          country: item.country || ''
+        });
 
-          if (!city || !country) {
-            console.log('Skipping row due to missing city/country:', row);
-            return null;
-          }
+        processedResults.push({
+          name: item.name || 'Unknown',
+          city: item.city || '',
+          state: item.state || '',
+          country: item.country || '',
+          coordinates
+        });
+      } catch (error) {
+        console.error(`Error processing item:`, item, error);
+      }
 
-          const coordinates = await geocodeAddress({
-            street,
-            city,
-            country
-          });
-          
-          return {
-            name: name || 'Unknown',
-            city,
-            state: '',
-            country,
-            coordinates,
-          };
-        } catch (error) {
-          console.error(`Error processing row:`, row, error);
-          return null;
-        }
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      const validResults = batchResults.filter((result): result is PersonData => 
-        result !== null
-      );
-      processedData.push(...validResults);
-
-      // Update progress
-      const currentProgress = Math.round((Math.min(i + batchSize, rows.length) / totalRows) * 100);
-      setProgress(currentProgress);
+      setProgress(Math.round(((i + 1) / total) * 100));
     }
 
-    return processedData;
+    return processedResults;
+  };
+
+  const downloadFile = (data: RawPersonData[], fileName: string) => {
+    const blob = generateExcelFile(data, fileName);
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
   };
 
   const processFile = async (file: File) => {
     setIsProcessing(true);
     setError(null);
     setProgress(0);
+    setProcessedData(null);
     
     try {
-      const rows = await parseFile(file);
-      const processedData = await processInBatches(rows);
+      const rawData = await parseFile(file);
+      const { valid, invalid, validationErrors } = processRawData(rawData);
 
-      if (processedData.length === 0) {
-        throw new Error('No locations could be found. Please check the addresses in your file.');
+      setStats({
+        total: rawData.length,
+        valid: valid.length,
+        invalid: invalid.length,
+        processed: 0
+      });
+
+      if (valid.length === 0) {
+        throw new Error('No valid data found in the file. Please check the format.');
       }
 
+      setProcessedData({ valid, invalid });
+      const processedData = await processValidData(valid);
       onDataProcessed(processedData);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Error processing file');
       console.error('Processing error:', error);
     } finally {
       setIsProcessing(false);
-      setProgress(0);
     }
   };
 
   return (
-    <div className="p-6 border-2 border-dashed rounded-lg border-gray-600 bg-gray-800 text-white">
-      <div className="mb-4 text-sm text-gray-400">
-        <p>Expected CSV format:</p>
-        <p>Name, Street Address, City, Country, Job Title</p>
-        <p className="mt-1 text-xs">Example: John Doe, 123 Main St, London, UK, Engineer</p>
+    <div className="space-y-4">
+      <div className="p-6 border-2 border-dashed rounded-lg border-gray-600 bg-gray-800 text-white">
+        {/* Existing file input UI */}
+        <div className="mb-4 text-sm text-gray-400">
+          <p>Expected file format (CSV or Excel):</p>
+          <p>Name, Street Address, City, State, Country</p>
+          <p className="mt-1 text-xs">Example: John Doe, 123 Main St, London, UK</p>
+        </div>
+        
+        <input
+          type="file"
+          accept=".csv,.xlsx,.xls"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) processFile(file);
+          }}
+          disabled={isProcessing}
+          className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
+        />
       </div>
-      <input
-        type="file"
-        accept=".csv,.xlsx,.xls"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) processFile(file);
-        }}
-        disabled={isProcessing}
-        className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-violet-50 file:text-violet-700 hover:file:bg-violet-100"
-      />
+
+      {/* Processing Status */}
       {isProcessing && (
-        <div className="mt-4 space-y-2">
-          <div className="flex items-center justify-between text-sm">
+        <div className="p-4 bg-gray-800 rounded-lg space-y-2">
+          <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
               <div className="animate-spin h-5 w-5 border-2 border-violet-500 rounded-full border-t-transparent"></div>
-              <p>Processing data...</p>
+              <span>Processing data...</span>
             </div>
-            <span className="text-violet-400 font-medium">{progress}%</span>
+            <span className="text-violet-400">{progress}%</span>
           </div>
-          <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
-            <div 
-              className="bg-violet-500 h-full transition-all duration-300 ease-in-out"
-              style={{ width: `${progress}%` }}
-            />
+          <div className="w-full bg-gray-700 rounded-full h-2">
+            <div className="bg-violet-500 h-full rounded-full transition-all duration-300" 
+                 style={{ width: `${progress}%` }}/>
           </div>
         </div>
       )}
-      {error && <p className="mt-2 text-red-400">{error}</p>}
+
+      {/* Stats and Download Buttons */}
+      {stats && processedData && (
+        <div className="p-4 bg-gray-800 rounded-lg space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-3 bg-gray-700 rounded-lg">
+              <div className="text-sm text-gray-400">Valid Records</div>
+              <div className="text-2xl text-violet-400">{stats.valid}</div>
+            </div>
+            <div className="p-3 bg-gray-700 rounded-lg">
+              <div className="text-sm text-gray-400">Invalid Records</div>
+              <div className="text-2xl text-red-400">{stats.invalid}</div>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <button
+              onClick={() => downloadFile(processedData.valid, 'valid-data.xlsx')}
+              className="flex-1 px-4 py-2 bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
+            >
+              Download Valid Data
+            </button>
+            {processedData.invalid.length > 0 && (
+              <button
+                onClick={() => downloadFile(processedData.invalid, 'invalid-data.xlsx')}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+              >
+                Download Invalid Data
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="p-4 bg-red-900/50 border border-red-700 rounded-lg text-red-400">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
