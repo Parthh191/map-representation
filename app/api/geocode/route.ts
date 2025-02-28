@@ -5,6 +5,13 @@ const GEOAPIFY_API_KEY = process.env.GEOAPIFY_API_KEY;
 const DELAY_BETWEEN_REQUESTS = 2000; // 200ms delay between requests
 let lastRequestTime = 0;
 
+interface GeocodeResponse {
+  results: {
+    lat: string;
+    lon: string;
+  }[];
+}
+
 async function waitForDelay() {
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
@@ -14,7 +21,7 @@ async function waitForDelay() {
   lastRequestTime = Date.now();
 }
 
-async function geocodeWithRetry(query: string, retries = 3): Promise<any> {
+async function geocodeWithRetry(query: string, retries = 3): Promise<GeocodeResponse | null> {
   for (let i = 0; i < retries; i++) {
     try {
       const { data } = await axios({
@@ -30,7 +37,7 @@ async function geocodeWithRetry(query: string, retries = 3): Promise<any> {
       });
 
       if (data?.results?.[0]) {
-        return data.results[0];
+        return data;
       }
       
       // If no results found, return null instead of throwing
@@ -74,7 +81,7 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({
-      coordinates: [parseFloat(location.lat), parseFloat(location.lon)]
+      coordinates: [parseFloat(location.results[0].lat), parseFloat(location.results[0].lon)]
     });
 
   } catch (error) {

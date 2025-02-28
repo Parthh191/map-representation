@@ -137,7 +137,7 @@ export default function FileUpload({ onDataProcessed }: FileUploadProps) {
     return processedResults;
   };
 
-  const downloadFile = (data: RawPersonData[], fileName: string) => {
+  const _downloadFile = (data: RawPersonData[], fileName: string) => {
     const blob = generateExcelFile(data, fileName);
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
